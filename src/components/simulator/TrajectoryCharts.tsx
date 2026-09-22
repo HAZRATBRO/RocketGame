@@ -1,4 +1,4 @@
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, CartesianGrid, ComposedChart, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { FlightSample } from '../../physics/simulate'
 
 const axisStyle = { fontSize: 11, fill: '#94a3b8' }
@@ -38,11 +38,11 @@ export function VelocityMachChart({ data }: { data: FlightSample[] }) {
   )
 }
 
-export function TrajectoryProfileChart({ data }: { data: FlightSample[] }) {
-  const rows = data.map((d) => ({ downrange: d.xNorth, alt: d.altitude }))
+export function TrajectoryProfileChart({ data, groundColor = '#4a7a3f' }: { data: FlightSample[]; groundColor?: string }) {
+  const rows = data.map((d) => ({ downrange: d.xNorth, alt: d.altitude, ground: d.terrainHeight }))
   return (
     <ResponsiveContainer width="100%" height={220}>
-      <LineChart data={rows} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
         <CartesianGrid stroke={gridStroke} strokeDasharray="3 3" />
         <XAxis
           dataKey="downrange"
@@ -54,8 +54,9 @@ export function TrajectoryProfileChart({ data }: { data: FlightSample[] }) {
         />
         <YAxis tick={axisStyle} label={{ value: 'Altitude (m)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }} />
         <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', fontSize: 12 }} />
+        <Area type="monotone" dataKey="ground" name="Terrain" stroke={groundColor} fill={groundColor} fillOpacity={0.45} strokeWidth={1.5} />
         <Line type="monotone" dataKey="alt" name="Altitude" stroke="#34d399" strokeWidth={2} dot={false} />
-      </LineChart>
+      </ComposedChart>
     </ResponsiveContainer>
   )
 }

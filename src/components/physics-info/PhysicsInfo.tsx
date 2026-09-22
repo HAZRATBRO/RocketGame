@@ -12,6 +12,8 @@ const TOC = [
   { id: 'equations-of-motion', label: 'Equations of Motion' },
   { id: 'numerics', label: 'Numerical Integration (RK4)' },
   { id: 'targeting', label: 'Targeting: The Shooting Method' },
+  { id: 'terrain-worlds', label: 'Terrain & World Physics' },
+  { id: 'mirv', label: 'MIRV: Multi-Target Strikes' },
 ]
 
 export function PhysicsInfo() {
@@ -230,6 +232,81 @@ k_4 = f(t+h,\, y+h\,k_3)`}
             reports the best (maximum-range) angle along with how far short it falls. This is the same basic technique
             historically used in ballistic firing-solution tables, now computed live from the exact drag and atmosphere
             model above rather than a simplified range table.
+          </p>
+        </Section>
+
+        <Section id="terrain-worlds" title="10. Terrain & World Physics">
+          <p>
+            Rather than a flat plane, the ground is a procedurally generated 2D height field{' '}
+            <InlineMath math="h(x_E, x_N)" />, built from a small sum of sine-wave &ldquo;octaves&rdquo; at decreasing
+            amplitude and increasing frequency &mdash; a cheap fractal-noise approximation of natural terrain that
+            needs no external noise library:
+          </p>
+          <BlockMath math={String.raw`h(x_E,x_N) = h_0 + \sum_{i=1}^{N} A_i \sin\!\big(\vec k_i \cdot (x_E,x_N) + \varphi_i\big), \qquad A_i = A_0 \cdot 2^{-i}`} />
+          <p>
+            with each octave's direction <InlineMath math="\vec k_i" /> and phase <InlineMath math="\varphi_i" />{' '}
+            drawn from a seeded random generator, so a given seed always reproduces the exact same landscape. A
+            &ldquo;cliff&rdquo; world adds a smooth sigmoid step across a random line for a sharp escarpment; a
+            &ldquo;flat&rdquo; world just dials the amplitude down to a few metres. The launch pad always sits exactly
+            at <InlineMath math="h_0" />, whichever style is active. Critically, ground contact is checked against{' '}
+            <InlineMath math="h(x_E,x_N)" /> at every integration step, not only at the end &mdash; so a rocket flown
+            too flat into a hillside impacts the slope directly, rather than only being checked against a fixed
+            reference altitude.
+          </p>
+          <p>
+            Choosing a world doesn't just reskin the map: it scales the physics itself. Local gravity and air density
+            both pick up world-specific multipliers on top of the same altitude-dependent Earth models described
+            above:
+          </p>
+          <BlockMath math={String.raw`g_{world}(h) = g_{Earth}(h)\cdot k_g, \qquad \rho_{world}(h) = \rho_{Earth}(h)\cdot k_\rho \cdot \frac{T_{Earth}(h)}{T_{Earth}(h)+\Delta T}`} />
+          <p>
+            The Moon preset sets <InlineMath math="k_g \approx 0.166" /> and treats the atmosphere as a true vacuum
+            (no drag, no dynamic pressure, no transonic drag rise at all) &mdash; the same rocket that barely clears
+            its own launch tower on Earth can suddenly achieve enormous range. Mars sets{' '}
+            <InlineMath math="k_g \approx 0.379" /> with a thin, cold CO&#8322; stand-in atmosphere (
+            <InlineMath math="k_\rho \approx 0.012" />, <InlineMath math="\Delta T \approx -60\text{K}" />). Mountain
+            and desert worlds keep Earth gravity but change the launch altitude and temperature offset, which feeds
+            back into the same ISA density formula from the atmosphere section &mdash; a high, cold mountain pad
+            genuinely flies differently than a hot desert one because the air really is thinner and less dense there.
+          </p>
+        </Section>
+
+        <Section id="mirv" title="11. MIRV: Multi-Target Strikes">
+          <p>
+            A MIRV (Multiple Independently-targetable Reentry Vehicle) trades one single-target shot for several
+            simultaneous ones. The simulator models this in two phases with a hard physical distinction between them:
+          </p>
+          <ol className="ml-5 list-decimal space-y-1">
+            <li>
+              <strong>Shared boost.</strong> One powered trajectory launches toward the target cluster's centroid,
+              exactly like a normal single-target flight, integrated with the same staged-thrust RK4 model used
+              everywhere else in this simulator.
+            </li>
+            <li>
+              <strong>Bus separation at burnout.</strong> Rather than waiting for apogee &mdash; where, on a steep
+              trajectory, vertical velocity has bled down toward zero and there is little energy left to redirect
+              &mdash; separation happens the moment the final stage burns out, while the vehicle still carries most of
+              its terminal speed. This is deliberately close to how real post-boost vehicles operate: they separate
+              with substantial kinetic energy still in hand, specifically so they have a meaningful maneuvering budget.
+            </li>
+          </ol>
+          <p>
+            From the release state <InlineMath math="(\vec x_r, \vec v_r)" /> (position and velocity captured directly
+            from the shared boost's own simulation samples), each warhead solves its own miniature shooting problem:
+            speed is fixed at <InlineMath math="\lVert \vec v_r \rVert" />, azimuth is aimed exactly at that warhead's
+            own target as seen <em>from the release point</em> (not from the launch pad &mdash; this correction matters
+            because separation happens well off to the side of the pad), and only the elevation angle is free:
+          </p>
+          <BlockMath math={String.raw`\text{find } \theta_i \text{ such that } \big\lVert \text{Coast}(\vec x_r, \vec v_r, \theta_i) - \vec x_r\big\rVert = d_i`} />
+          <p>
+            where <InlineMath math="d_i" /> is target <InlineMath math="i" />'s distance from the release point and{' '}
+            <InlineMath math="\text{Coast}(\cdot)" /> is an unpowered RK4 integration under drag, gravity, and terrain
+            collision &mdash; identical physics to the main simulator, just with thrust set to zero and a small,
+            streamlined reentry-vehicle drag profile in place of the full airframe's. The same coarse-scan-then-bisect
+            shooting method from the section above solves for <InlineMath math="\theta_i" /> independently for every
+            warhead, which is why some can hit while others miss: each one is its own self-contained targeting
+            problem, constrained only by how much energy the shared boost handed it at separation. Warhead mass is the
+            design's total payload mass split evenly across however many targets are selected (up to four).
           </p>
         </Section>
       </div>

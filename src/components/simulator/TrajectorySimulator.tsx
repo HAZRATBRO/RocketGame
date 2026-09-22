@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { formatDistance, formatNumber, formatTime } from '../../lib/format'
 import { liftoffTWR } from '../../physics/rocket'
-import { downsample, runSimulation } from '../../physics/simulate'
+import { type SimulationResult, downsample, runSimulation } from '../../physics/simulate'
 import { useRocketStore } from '../../store/rocketStore'
+import { useWorldStore } from '../../store/worldStore'
 import { Card } from '../ui/Card'
 import { Stat } from '../ui/Stat'
 import { Button, SliderField } from '../ui/fields'
@@ -11,31 +12,30 @@ import { AltitudeTimeChart, DynamicPressureChart, TrajectoryProfileChart, Veloci
 
 export function TrajectorySimulator() {
   const design = useRocketStore((s) => s.design)
+  const world = useWorldStore((s) => s.preset)
+  const terrain = useWorldStore((s) => s.terrain)
   const [elevationDeg, setElevationDeg] = useState(80)
-  const [launchAltitude, setLaunchAltitude] = useState(0)
-  const [hasRun, setHasRun] = useState(false)
+  const [result, setResult] = useState<SimulationResult | null>(null)
 
   const hasEngine = design.components.some((c) => c.type === 'engine')
   const twr = liftoffTWR(design)
 
-  const result = useMemo(() => {
-    if (!hasRun) return null
-    return runSimulation(design, { elevationDeg, azimuthDeg: 0, launchSiteAltitude: launchAltitude })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasRun])
+  const launch = () => {
+    setResult(runSimulation(design, { elevationDeg, azimuthDeg: 0, terrain, environment: world.environment }))
+  }
 
   const chartSamples = useMemo(() => (result ? downsample(result.samples, 400) : []), [result])
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
       <div className="space-y-4">
-        <Card title="Launch Configuration" subtitle={`Flying: ${design.name}`}>
+        <Card title="Launch Configuration" subtitle={`Flying: ${design.name} — ${world.name}`}>
           <div className="space-y-4">
             <SliderField label="Elevation Angle" unit="°" min={5} max={90} value={elevationDeg} onChange={setElevationDeg} />
-            <SliderField label="Launch Site Altitude" unit=" m" min={0} max={3000} step={10} value={launchAltitude} onChange={setLaunchAltitude} />
+            <p className="text-xs text-slate-500">{world.description}</p>
             {!hasEngine && <p className="text-xs text-rose-400">Add at least one engine in the Components Creator before simulating.</p>}
             {hasEngine && twr <= 1 && <p className="text-xs text-rose-400">TWR ≤ 1 — rocket cannot lift off. Adjust the design.</p>}
-            <Button onClick={() => setHasRun(true)} disabled={!hasEngine || twr <= 1}>
+            <Button onClick={launch} disabled={!hasEngine || twr <= 1}>
               Launch Simulation
             </Button>
           </div>
@@ -53,6 +53,12 @@ export function TrajectorySimulator() {
               <Stat label="Flight Time" value={formatTime(result.summary.flightTime)} />
               <Stat label="Range" value={formatDistance(result.summary.range)} accent="emerald" />
             </div>
+            {!result.summary.landed && (
+              <p className="mt-3 text-xs text-amber-400">
+                Simulation hit its time cap before landing — range and flight time reflect the cutoff point, not an
+                actual touchdown.
+              </p>
+            )}
           </Card>
         )}
       </div>
@@ -74,7 +80,7 @@ export function TrajectorySimulator() {
               <AltitudeTimeChart data={chartSamples} />
             </Card>
             <Card title="Trajectory Profile (Altitude vs Downrange)">
-              <TrajectoryProfileChart data={chartSamples} />
+              <TrajectoryProfileChart data={chartSamples} groundColor={world.theme.ground} />
             </Card>
             <Card title="Velocity &amp; Mach vs Time">
               <VelocityMachChart data={chartSamples} />

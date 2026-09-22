@@ -1,6 +1,13 @@
 import { RAD2DEG } from './constants'
+import type { Environment } from './environment'
 import type { RocketDesign } from './rocket'
 import { type SimulationResult, runSimulation } from './simulate'
+import type { TerrainSampler } from './terrain'
+
+export interface WorldContext {
+  environment?: Environment
+  terrain?: TerrainSampler
+}
 
 export interface TargetingResult {
   hit: boolean
@@ -35,13 +42,13 @@ export function solveForTarget(
   design: RocketDesign,
   distance: number,
   azimuthDeg: number,
-  launchSiteAltitude = 0,
+  world: WorldContext = {},
 ): TargetingResult {
   const coarseDt = 0.08
   const fineDt = 0.02
 
   const rangeAt = (elevationDeg: number, dt: number): SimulationResult =>
-    runSimulation(design, { elevationDeg, azimuthDeg, launchSiteAltitude, dt })
+    runSimulation(design, { elevationDeg, azimuthDeg, dt, environment: world.environment, terrain: world.terrain })
 
   // Non-uniform scan: fine resolution at very low (flat/fast) angles where an overpowered
   // rocket's range can already be large due to the launch-rod/pitch-kick climb, then coarser

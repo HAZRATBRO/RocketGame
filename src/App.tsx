@@ -3,6 +3,7 @@ import { ComponentsCreator } from './components/creator/ComponentsCreator'
 import { PhysicsInfo } from './components/physics-info/PhysicsInfo'
 import { TrajectorySimulator } from './components/simulator/TrajectorySimulator'
 import { TargetingMap } from './components/targeting/TargetingMap'
+import { WorldSelector } from './components/world/WorldSelector'
 
 type Tab = 'simulator' | 'creator' | 'physics' | 'targeting'
 
@@ -27,20 +28,23 @@ function App() {
               <p className="text-xs text-slate-500">Physics-based rocket design, simulation &amp; targeting</p>
             </div>
           </div>
-          <nav className="flex flex-wrap gap-1 rounded-lg bg-slate-900 p-1">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  tab === t.id ? 'bg-orange-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
-                }`}
-              >
-                <span className="mr-1.5">{t.icon}</span>
-                {t.label}
-              </button>
-            ))}
-          </nav>
+          <div className="flex flex-wrap items-center gap-3">
+            <nav className="flex flex-wrap gap-1 rounded-lg bg-slate-900 p-1">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    tab === t.id ? 'bg-orange-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                  }`}
+                >
+                  <span className="mr-1.5">{t.icon}</span>
+                  {t.label}
+                </button>
+              ))}
+            </nav>
+            <WorldSelector />
+          </div>
         </div>
       </header>
 

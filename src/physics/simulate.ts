@@ -1,6 +1,6 @@
 import { dragCoefficient, dynamicPressure } from './aerodynamics'
-import { atmosphereAt } from './atmosphere'
-import { DEG2RAD, gravityAt } from './constants'
+import { DEG2RAD } from './constants'
+import { EARTH_ENVIRONMENT, type Environment, effectiveAtmosphere, effectiveGravity } from './environment'
 import {
   type RocketComponent,
   type RocketDesign,
@@ -11,14 +11,19 @@ import {
   referenceArea,
   thrustAt,
 } from './rocket'
+import type { TerrainSampler } from './terrain'
 
 export interface LaunchParams {
   /** Elevation angle from horizontal, degrees (90 = straight up). */
   elevationDeg: number
   /** Compass azimuth toward the target, degrees (0 = north, 90 = east). */
   azimuthDeg: number
-  /** Launch site altitude above sea level, m. */
+  /** Launch site altitude above sea level, m. Ignored (derived from terrain) when `terrain` is set. */
   launchSiteAltitude?: number
+  /** Ground height as a function of (east, north) position, m. Flat at `launchSiteAltitude` if omitted. */
+  terrain?: TerrainSampler
+  /** World physics (gravity/atmosphere multipliers). Defaults to Earth. */
+  environment?: Environment
   /** Duration the rocket rides straight up on the launch rod/tower before pitching over, s. */
   verticalRodTime?: number
   /** Duration of the pitch-over ("gravity turn kick") from vertical to the target elevation, s. */
@@ -34,6 +39,11 @@ export interface FlightSample {
   xNorth: number
   xEast: number
   altitude: number
+  /** Ground elevation directly below the rocket at this instant, m. */
+  terrainHeight: number
+  vNorth: number
+  vEast: number
+  vAlt: number
   speed: number
   mach: number
   dynamicPressure: number
@@ -56,6 +66,8 @@ export interface FlightSummary {
   range: number
   impactPoint: { xNorth: number; xEast: number }
   liftoff: boolean
+  /** False if the simulation hit its time cap while still airborne — range/impactPoint then reflect the cutoff position, not an actual landing. */
+  landed: boolean
 }
 
 export interface SimulationResult {
@@ -103,16 +115,18 @@ const DEFAULTS = {
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
+const flatTerrain = (altitude: number): TerrainSampler => () => altitude
 
 /**
  * Integrates the 6-state rocket trajectory (north/east/altitude position and velocity) with
- * classic 4th-order Runge-Kutta, under thrust (staged), gravity, and Mach-dependent
+ * classic 4th-order Runge-Kutta, under thrust (staged), world gravity, and Mach-dependent
  * aerodynamic drag. The rocket's attitude follows a simple rigid pitch program: vertical
  * through the launch rod, a linear pitch-over ("gravity turn kick") to the commanded
  * elevation angle, then a fixed attitude for the remainder of powered flight — approximating
  * a finned, aerodynamically-stable vehicle. After the final stage burns out the vehicle
- * coasts ballistically (drag + gravity only) until it descends back through the launch
- * altitude.
+ * coasts ballistically (drag + gravity only) until it hits the ground — real terrain if
+ * `terrain` is supplied (checked every step, so a hillside short of the nominal target is a
+ * genuine impact, not just the final descent through a flat plane).
  */
 export function runSimulation(design: RocketDesign, params: LaunchParams): SimulationResult {
   const stages = buildStages(design.components)
@@ -122,11 +136,18 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
   // commanded elevation the way a real staged/finned rocket's would. Scale both durations off
   // the first stage's burn time, with sane floors/ceilings for very short or very long motors.
   const firstBurnTime = stages[0]?.burnTime ?? 0
+  const env = params.environment ?? EARTH_ENVIRONMENT
+  // Lower gravity (Moon/Mars worlds) stretches flight times a lot — a fixed 600s cap would
+  // silently truncate a low-g flight before it lands, so scale the default cap down with
+  // gravityMultiplier (bounded so it can't blow up for near-zero values).
   const dynamicDefaults = {
     verticalRodTime: clamp(firstBurnTime * 0.15, 0.3, 1.2),
     pitchKickDuration: clamp(firstBurnTime * 0.45, 0.6, 4),
+    maxTime: clamp(DEFAULTS.maxTime / Math.max(env.gravityMultiplier, 0.05), DEFAULTS.maxTime, 6000),
   }
   const opts = { ...DEFAULTS, ...dynamicDefaults, ...params }
+  const terrain = params.terrain ?? flatTerrain(opts.launchSiteAltitude)
+  const groundOrigin = terrain(0, 0)
   const emptyResult: SimulationResult = {
     samples: [],
     summary: {
@@ -141,6 +162,7 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
       range: 0,
       impactPoint: { xNorth: 0, xEast: 0 },
       liftoff: false,
+      landed: false,
     },
   }
   if (stages.length === 0 || stages.every((s) => s.engines.length === 0)) return emptyResult
@@ -153,14 +175,14 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
   const baseCd = baseDragCoefficient(design.components)
   const dt = opts.dt
 
-  let state: Vec6 = { xN: 0, xE: 0, alt: opts.launchSiteAltitude, vN: 0, vE: 0, vAlt: 0 }
+  let state: Vec6 = { xN: 0, xE: 0, alt: groundOrigin, vN: 0, vE: 0, vAlt: 0 }
   let t = 0
   let stageIndex = 0
   let stageIgnitionT = 0
   let burnoutTime: number | null = null
 
   const samples: FlightSample[] = []
-  let apogee = opts.launchSiteAltitude
+  let apogee = groundOrigin
   let apogeeTime = 0
   let maxVelocity = 0
   let maxMach = 0
@@ -177,7 +199,7 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
     const thrustDirUp = Math.sin(pitch)
 
     const speed = Math.sqrt(s.vN * s.vN + s.vE * s.vE + s.vAlt * s.vAlt)
-    const atmo = atmosphereAt(s.alt)
+    const atmo = effectiveAtmosphere(s.alt, env)
     const mach = atmo.speedOfSound > 0 ? speed / atmo.speedOfSound : 0
     const cd = dragCoefficient(mach, baseCd)
     const q = dynamicPressure(atmo.density, speed)
@@ -187,7 +209,7 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
     const dragDirE = -s.vE * invSpeed
     const dragDirUp = -s.vAlt * invSpeed
 
-    const g = gravityAt(s.alt)
+    const g = effectiveGravity(s.alt, env)
 
     const accN = (thrust * thrustDirN + dragMag * dragDirN) / mass
     const accE = (thrust * thrustDirE + dragMag * dragDirE) / mass
@@ -211,7 +233,6 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
   }
 
   const lastStageIndex = stages.length - 1
-  let prevAltForLanding = state.alt
   let landed = false
 
   while (t < opts.maxTime && !landed) {
@@ -248,18 +269,23 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
       vAlt: state.vAlt + (dt / 6) * (k1.d.vAlt + 2 * k2.d.vAlt + 2 * k3.d.vAlt + k4.d.vAlt),
     }
 
-    prevAltForLanding = state.alt
     const prevT = t
     const prevSample = state
+    const prevGroundHeight = terrain(prevSample.xE, prevSample.xN)
     state = next
     t += dt
 
     const speed = Math.sqrt(state.vN * state.vN + state.vE * state.vE + state.vAlt * state.vAlt)
+    const groundHeight = terrain(state.xE, state.xN)
     samples.push({
       t,
       xNorth: state.xN,
       xEast: state.xE,
       altitude: state.alt,
+      terrainHeight: groundHeight,
+      vNorth: state.vN,
+      vEast: state.vE,
+      vAlt: state.vAlt,
       speed,
       mach: k1.info.mach,
       dynamicPressure: k1.info.q,
@@ -279,19 +305,28 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
     maxAccel = Math.max(maxAccel, k1.info.accelMag)
 
     const pastAscent = t > opts.verticalRodTime + opts.pitchKickDuration
-    if (pastAscent && state.vAlt < 0 && state.alt <= opts.launchSiteAltitude) {
-      // Linear interpolation between the previous and current sample for a precise impact point.
-      const frac = (opts.launchSiteAltitude - prevAltForLanding) / (state.alt - prevAltForLanding)
-      const impactN = prevSample.xN + (state.xN - prevSample.xN) * frac
-      const impactE = prevSample.xE + (state.xE - prevSample.xE) * frac
-      const impactT = prevT + (t - prevT) * frac
-      state = { ...state, xN: impactN, xE: impactE, alt: opts.launchSiteAltitude }
+    if (pastAscent && state.alt <= groundHeight) {
+      // Linear interpolation between the previous and current sample for a precise impact
+      // point, using the (locally near-constant) ground height at the new sample as the
+      // interpolation target — accurate for the small per-step distance the rocket covers.
+      const denom = state.alt - prevSample.alt
+      const frac = denom !== 0 ? (groundHeight - prevSample.alt) / denom : 1
+      const clampedFrac = clamp(frac, 0, 1)
+      const impactN = prevSample.xN + (state.xN - prevSample.xN) * clampedFrac
+      const impactE = prevSample.xE + (state.xE - prevSample.xE) * clampedFrac
+      const impactT = prevT + (t - prevT) * clampedFrac
+      const impactAlt = prevGroundHeight + (groundHeight - prevGroundHeight) * clampedFrac
+      state = { ...state, xN: impactN, xE: impactE, alt: impactAlt }
       t = impactT
       samples.push({
         t,
         xNorth: impactN,
         xEast: impactE,
-        altitude: opts.launchSiteAltitude,
+        altitude: impactAlt,
+        terrainHeight: impactAlt,
+        vNorth: state.vN,
+        vEast: state.vE,
+        vAlt: state.vAlt,
         speed,
         mach: k1.info.mach,
         dynamicPressure: k1.info.q,
@@ -321,6 +356,7 @@ export function runSimulation(design: RocketDesign, params: LaunchParams): Simul
       range,
       impactPoint: finalSample ? { xNorth: finalSample.xNorth, xEast: finalSample.xEast } : { xNorth: 0, xEast: 0 },
       liftoff: true,
+      landed,
     },
   }
 }
